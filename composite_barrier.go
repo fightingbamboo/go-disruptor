@@ -1,22 +1,22 @@
 package disruptor
 
-type CompositeBarrier []*Cursor
+import "math"
 
-func NewCompositeBarrier(upstream ...*Cursor) CompositeBarrier {
-	if len(upstream) == 0 {
-		panic("At least one upstream cursor is required.")
+type compositeBarrier []*Cursor
+
+func NewCompositeBarrier(sequences ...*Cursor) Barrier {
+	if len(sequences) == 1 {
+		return sequences[0]
+	} else {
+		return compositeBarrier(sequences)
 	}
-
-	cursors := make([]*Cursor, len(upstream))
-	copy(cursors, upstream)
-	return CompositeBarrier(cursors)
 }
 
-func (this CompositeBarrier) Read(noop int64) int64 {
-	minimum := MaxSequenceValue
+func (this compositeBarrier) Load() int64 {
+	var minimum int64 = math.MaxInt64
+
 	for _, item := range this {
-		sequence := item.Load()
-		if sequence < minimum {
+		if sequence := item.Load(); sequence < minimum {
 			minimum = sequence
 		}
 	}

@@ -2,72 +2,53 @@ package main
 
 import (
 	"fmt"
-	"runtime"
-	"time"
+	"io"
 
-	"github.com/smartystreets/go-disruptor"
+	"github.com/smartystreets-prototypes/go-disruptor"
 )
-
-const (
-	BufferSize   = 1024 * 64
-	BufferMask   = BufferSize - 1
-	Iterations   = 1000000 * 100
-	Reservations = 16
-)
-
-var ring = [BufferSize]int64{}
 
 func main() {
-	runtime.GOMAXPROCS(2)
+	writer, reader := disruptor.New(
+		disruptor.WithCapacity(BufferSize),
+		disruptor.WithConsumerGroup(MyConsumer{}))
 
-	controller := disruptor.
-		Configure(BufferSize).
-		WithConsumerGroup(SampleConsumer{}).
-		Build()
+	go publish(writer, reader)
 
-	controller.Start()
-
-	started := time.Now()
-	publish(controller.Writer())
-	finished := time.Now()
-
-	controller.Stop()
-	fmt.Println(Iterations, finished.Sub(started))
+	reader.Read()
 }
 
-func publish(writer *disruptor.Writer) {
-	sequence := disruptor.InitialSequenceValue
-	for sequence <= Iterations {
+func publish(writer disruptor.Writer, closer io.Closer) {
+	for sequence := int64(0); sequence <= Iterations; {
 		sequence = writer.Reserve(Reservations)
+
 		for lower := sequence - Reservations + 1; lower <= sequence; lower++ {
-			ring[lower&BufferMask] = lower
+			ringBuffer[lower&BufferMask] = lower
 		}
 
 		writer.Commit(sequence-Reservations+1, sequence)
 	}
+
+	_ = closer.Close()
 }
 
-// func publish(writer *disruptor.Writer) {
-// 	sequence := disruptor.InitialSequenceValue
-// 	for sequence <= Iterations {
-// 		sequence += Reservations // only an advantage at smaller reservations, e.g. 1-4?
-// 		writer.Await(sequence)
-// 		for lower := sequence - Reservations + 1; lower <= sequence; lower++ {
-// 			ring[lower&BufferMask] = lower
-// 		}
-// 		writer.Commit(sequence-Reservations+1, sequence)
-// 	}
-// }
+// ////////////////////
 
-type SampleConsumer struct{}
+type MyConsumer struct{}
 
-func (this SampleConsumer) Consume(lower, upper int64) {
-	for lower <= upper {
-		message := ring[lower&BufferMask]
+func (this MyConsumer) Consume(lower, upper int64) {
+	for ; lower <= upper; lower++ {
+		message := ringBuffer[lower&BufferMask]
 		if message != lower {
-			fmt.Println("Race condition", message, lower)
-			panic("Race condition")
+			panic(fmt.Errorf("race condition: %d %d", message, lower))
 		}
-		lower++
 	}
 }
+
+const (
+	BufferSize   = 1024 * 64
+	BufferMask   = BufferSize - 1
+	Iterations   = 128 * 1024 * 32
+	Reservations = 1
+)
+
+var ringBuffer = [BufferSize]int64{}
